@@ -96,6 +96,7 @@ func newInspectCmd(opts *options) *cobra.Command {
 	var keyFile string
 	var durability string
 	var reportPath string
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "inspect <contract-id>",
@@ -116,6 +117,11 @@ is sent.
 ` + argHelp,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			outputFormat, err := selectOutputFormat(cmd, opts, format)
+			if err != nil {
+				return err
+			}
+
 			d, err := parseDurability(durability)
 			if err != nil {
 				return err
@@ -151,16 +157,21 @@ is sent.
 				return err
 			}
 
-			if opts.jsonOut {
+			switch outputFormat {
+			case "json":
 				return writeJSON(cmd.OutOrStdout(), result)
+			case "markdown":
+				return renderMarkdownInspect(cmd.OutOrStdout(), result)
+			default:
+				return renderInspect(cmd.OutOrStdout(), result)
 			}
-			return renderInspect(cmd.OutOrStdout(), result)
 		},
 	}
 
 	cmd.Flags().StringArrayVar(&dataKeys, "key", nil, "a contract data key to inspect, in type:value form (repeatable)")
 	cmd.Flags().StringVar(&keyFile, "key-file", "", "a file listing data keys to inspect, one spec per line (blank lines and # comments ignored)")
 	cmd.Flags().StringVar(&durability, "durability", "persistent", "durability for --key lookups: persistent or temporary")
+	cmd.Flags().StringVar(&format, "format", "text", "output format: text, json or markdown")
 	cmd.Flags().StringVar(&reportPath, "report", "", "write the JSON result to this file while printing text as usual")
 	return cmd
 }
@@ -174,6 +185,7 @@ func newCheckCmd(opts *options) *cobra.Command {
 	var file string
 	var checkTimeout time.Duration
 	var reportPath string
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "check <contract-id> | check --file <checks.json>",
@@ -229,6 +241,11 @@ instead of hiding in the log. --json suppresses them.`,
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			outputFormat, err := selectOutputFormat(cmd, opts, format)
+			if err != nil {
+				return err
+			}
+
 			report, err := openReport(reportPath)
 			if err != nil {
 				return err
@@ -236,7 +253,7 @@ instead of hiding in the log. --json suppresses them.`,
 			defer report.close()
 
 			if file != "" {
-				return runCheckFile(cmd, opts, file, checkTimeout, report)
+				return runCheckFile(cmd, opts, file, checkTimeout, report, outputFormat)
 			}
 
 			d, err := parseDurability(durability)
@@ -273,9 +290,12 @@ instead of hiding in the log. --json suppresses them.`,
 			}
 
 			out := cmd.OutOrStdout()
-			if opts.jsonOut {
+			switch outputFormat {
+			case "json":
 				err = writeJSON(out, result)
-			} else {
+			case "markdown":
+				err = renderMarkdownCheck(out, result)
+			default:
 				err = renderCheck(out, result)
 			}
 			if err != nil {
@@ -284,7 +304,7 @@ instead of hiding in the log. --json suppresses them.`,
 
 			// Annotations go to stdout, the stream a step's log reads. They
 			// stay off under --json, whose consumer parses the document.
-			if !opts.jsonOut {
+			if outputFormat == "text" {
 				emitCheckAnnotations(out, result, inGitHubActions())
 			}
 
@@ -303,12 +323,25 @@ instead of hiding in the log. --json suppresses them.`,
 	cmd.Flags().StringVarP(&file, "file", "f", "", `run every check listed in this JSON file ("-" for stdin)`)
 	cmd.Flags().DurationVar(&checkTimeout, "check-timeout", 0,
 		`default time limit for each check in --file; a per-entry "timeout" wins (0 means no limit)`)
+	cmd.Flags().StringVar(&format, "format", "text", "output format: text, json or markdown")
 	cmd.Flags().StringVar(&reportPath, "report", "", "write the JSON result to this file while printing text as usual")
 	return cmd
 }
 
+func selectOutputFormat(cmd *cobra.Command, opts *options, format string) (string, error) {
+	if opts.jsonOut && !cmd.Flags().Changed("format") {
+		return "json", nil
+	}
+	switch format {
+	case "text", "json", "markdown":
+		return format, nil
+	default:
+		return "", fmt.Errorf("unsupported output format %q (want text, json or markdown)", format)
+	}
+}
+
 // runCheckFile runs a batch of checks read from path.
-func runCheckFile(cmd *cobra.Command, opts *options, path string, checkTimeout time.Duration, report *reportFile) error {
+func runCheckFile(cmd *cobra.Command, opts *options, path string, checkTimeout time.Duration, report *reportFile, format string) error {
 	req, err := readBatch(cmd.InOrStdin(), path)
 	if err != nil {
 		return err
@@ -333,9 +366,12 @@ func runCheckFile(cmd *cobra.Command, opts *options, path string, checkTimeout t
 	}
 
 	out := cmd.OutOrStdout()
-	if opts.jsonOut {
+	switch format {
+	case "json":
 		err = writeJSON(out, result)
-	} else {
+	case "markdown":
+		err = renderMarkdownBatch(out, result)
+	default:
 		err = renderBatch(out, result)
 	}
 	if err != nil {
@@ -344,7 +380,7 @@ func runCheckFile(cmd *cobra.Command, opts *options, path string, checkTimeout t
 
 	// Annotations go to stdout, the stream a step's log reads. They stay off
 	// under --json, whose consumer parses the document.
-	if !opts.jsonOut {
+	if format == "text" {
 		emitBatchAnnotations(out, result, inGitHubActions())
 	}
 
