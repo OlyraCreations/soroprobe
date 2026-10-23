@@ -270,6 +270,7 @@ func newInspectCmd(opts *options) *cobra.Command {
 	var keyFile string
 	var durability string
 	var reportPath string
+	var format string
 	var estimateExtend uint32
 
 	cmd := &cobra.Command{
@@ -296,6 +297,11 @@ has already expired — says so instead of quoting a price.
 ` + argHelp,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) (err error) {
+			outputFormat, err := selectOutputFormat(cmd, opts, format)
+			if err != nil {
+				return err
+			}
+
 			d, err := parseDurability(durability)
 			if err != nil {
 				return err
@@ -363,6 +369,7 @@ func newCheckCmd(opts *options) *cobra.Command {
 	var checkTimeout time.Duration
 	var concurrency int
 	var reportPath string
+	var format string
 	var quiet bool
 
 	cmd := &cobra.Command{
@@ -427,6 +434,10 @@ instead of hiding in the log. --json and --quiet suppress them.`,
 			if err := checkQuietConflicts(quiet, opts.jsonOut, reportPath); err != nil {
 				return err
 			}
+			outputFormat, err := selectOutputFormat(cmd, opts, format)
+			if err != nil {
+				return err
+			}
 
 			report, err := openReport(reportPath)
 			if err != nil {
@@ -435,7 +446,7 @@ instead of hiding in the log. --json and --quiet suppress them.`,
 			defer func() { err = errors.Join(err, report.close()) }()
 
 			if file != "" {
-				return runCheckFile(cmd, opts, file, checkTimeout, concurrency, report, quiet)
+				return runCheckFile(cmd, opts, file, checkTimeout, concurrency, report, quiet, outputFormat)
 			}
 
 			d, err := parseDurability(durability)
@@ -471,7 +482,7 @@ instead of hiding in the log. --json and --quiet suppress them.`,
 				return err
 			}
 
-			if err := emitSingleCheckOutput(cmd, opts, result, quiet); err != nil {
+			if err := emitSingleCheckOutput(cmd, result, quiet, outputFormat); err != nil {
 				return err
 			}
 
@@ -490,6 +501,7 @@ instead of hiding in the log. --json and --quiet suppress them.`,
 	cmd.Flags().StringVarP(&file, "file", "f", "", `run every check listed in this JSON file ("-" for stdin)`)
 	cmd.Flags().DurationVar(&checkTimeout, "check-timeout", 0,
 		`default time limit for each check in --file; a per-entry "timeout" wins (0 means no limit)`)
+	cmd.Flags().StringVar(&format, "format", "text", "output format: text, json or markdown")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 1, "maximum number of --file checks to run at once")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false,
 		"print no report; the exit code is the whole answer (errors still reach stderr)")
@@ -510,7 +522,7 @@ func selectOutputFormat(cmd *cobra.Command, opts *options, format string) (strin
 }
 
 // runCheckFile runs a batch of checks read from path.
-func runCheckFile(cmd *cobra.Command, opts *options, path string, checkTimeout time.Duration, concurrency int, report *reportFile, quiet bool) error {
+func runCheckFile(cmd *cobra.Command, opts *options, path string, checkTimeout time.Duration, concurrency int, report *reportFile, quiet bool, format string) error {
 	req, err := readBatch(cmd.InOrStdin(), path)
 	if err != nil {
 		return err
@@ -537,9 +549,12 @@ func runCheckFile(cmd *cobra.Command, opts *options, path string, checkTimeout t
 
 	out := cmd.OutOrStdout()
 	if !quiet {
-		if opts.jsonOut {
+		switch format {
+		case "json":
 			err = writeJSON(out, result)
-		} else {
+		case "markdown":
+			err = renderMarkdownBatch(out, result)
+		default:
 			err = renderBatch(out, result)
 		}
 		if err != nil {
@@ -547,8 +562,9 @@ func runCheckFile(cmd *cobra.Command, opts *options, path string, checkTimeout t
 		}
 
 		// Annotations go to stdout, the stream a step's log reads. They stay
-		// off under --json, whose consumer parses the document.
-		if !opts.jsonOut {
+		// off for JSON and Markdown, whose consumers parse or render the
+		// document.
+		if format == "text" {
 			emitBatchAnnotations(out, result, inGitHubActions())
 		}
 	}
@@ -568,17 +584,21 @@ func runCheckFile(cmd *cobra.Command, opts *options, path string, checkTimeout t
 // unless --quiet asked for none. Annotations are only emitted when a text
 // report was printed: --json consumers parse the document, and --quiet asked
 // for silence.
-func emitSingleCheckOutput(cmd *cobra.Command, opts *options, result *probe.CheckResult, quiet bool) error {
+func emitSingleCheckOutput(cmd *cobra.Command, result *probe.CheckResult, quiet bool, format string) error {
 	if quiet {
 		return nil
 	}
 	out := cmd.OutOrStdout()
-	if opts.jsonOut {
+	switch format {
+	case "json":
 		return writeJSON(out, result)
+	case "markdown":
+		return renderMarkdownCheck(out, result)
 	}
 	if err := renderCheck(out, result); err != nil {
 		return err
 	}
+	// Annotations go to stdout, the stream a step's log reads.
 	emitCheckAnnotations(out, result, inGitHubActions())
 	return nil
 }

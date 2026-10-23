@@ -16,7 +16,7 @@ import (
 func TestServeGracefulShutdownCompletesInFlightRequest(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -47,7 +47,7 @@ func TestServeGracefulShutdownCompletesInFlightRequest(t *testing.T) {
 			}{err: err}
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		body, err := io.ReadAll(resp.Body)
 		response <- struct {
 			status int
@@ -88,7 +88,7 @@ func TestServeGracefulShutdownCompletesInFlightRequest(t *testing.T) {
 func TestListenAndServeReturnsAddressInUse(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	server := New(Options{Addr: listener.Addr().String()})
 	assert.Error(t, server.ListenAndServe(context.Background()))
@@ -104,6 +104,6 @@ func TestListenAndServeCancelledContextReturnsPromptly(t *testing.T) {
 	case err := <-done:
 		assert.NoError(t, err)
 	case <-time.After(3 * time.Second):
-		t.Fatal("server did not honor the cancelled context")
+		t.Fatal("server did not honor the canceled context")
 	}
 }

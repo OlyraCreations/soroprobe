@@ -160,7 +160,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	return s.Serve(ctx, listener)
 }
 
-// Serve runs the server on listener until ctx is cancelled, then shuts it down gracefully.
+// Serve runs the server on listener until ctx is canceled, then shuts it down gracefully.
 func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	srv := &http.Server{
 		Handler:           s.router,
