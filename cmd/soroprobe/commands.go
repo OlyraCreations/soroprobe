@@ -16,6 +16,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/soroworks/soroprobe/internal/api"
+	"github.com/soroworks/soroprobe/internal/config"
 	"github.com/soroworks/soroprobe/internal/health"
 	"github.com/soroworks/soroprobe/internal/probe"
 )
@@ -362,6 +363,7 @@ has already expired — says so instead of quoting a price.
 func newCheckCmd(opts *options) *cobra.Command {
 	var function string
 	var callArgs []string
+	var expect string
 	var dataKeys []string
 	var keyFile string
 	var durability string
@@ -469,6 +471,7 @@ instead of hiding in the log. --json and --quiet suppress them.`,
 				ContractID:     args[0],
 				Function:       function,
 				Args:           callArgs,
+				Expect:         expect,
 				DataKeys:       keys,
 				DataDurability: d,
 			})
@@ -495,6 +498,7 @@ instead of hiding in the log. --json and --quiet suppress them.`,
 
 	cmd.Flags().StringVar(&function, "fn", "", "read-only function to simulate as a liveness probe")
 	cmd.Flags().StringArrayVar(&callArgs, "arg", nil, "argument for --fn, in type:value form (repeatable)")
+	cmd.Flags().StringVar(&expect, "expect", "", "expected return value specification for --fn, in type:value form")
 	cmd.Flags().StringArrayVar(&dataKeys, "key", nil, "a contract data key to include in the TTL check (repeatable)")
 	cmd.Flags().StringVar(&keyFile, "key-file", "", "a file listing data keys for the TTL check, one spec per line (blank lines and # comments ignored)")
 	cmd.Flags().StringVar(&durability, "durability", "persistent", "durability for --key lookups: persistent or temporary")
@@ -727,12 +731,18 @@ func inGitHubActions() bool {
 
 func newServeCmd(opts *options) *cobra.Command {
 	var addr string
+	var apiToken string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the HTTP API",
 		Long: `Serve the HTTP API, which mirrors the CLI for use from CI systems and other
-services. The API is read-only, exactly like the CLI.`,
+services. The API is read-only, exactly like the CLI.
+
+The API is unauthenticated by default, which is fine on a private network. Set
+API_TOKEN (or --api-token) to require "Authorization: Bearer <token>" on every
+/v1 route; /healthz stays open so a liveness probe needs no credential. A
+token shorter than 16 characters is rejected at startup.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if addr != "" {
@@ -752,12 +762,15 @@ services. The API is read-only, exactly like the CLI.`,
 				Logger:            log,
 				CORSOrigins:       opts.cfg.CORSOrigins,
 				NetworkPassphrase: opts.cfg.NetworkPassphrase,
+				APIToken:          opts.cfg.APIToken,
 			})
 			return server.ListenAndServe(cmd.Context())
 		},
 	}
 
 	cmd.Flags().StringVar(&addr, "addr", "", "listen address, overriding HTTP_ADDR")
+	cmd.Flags().StringVar(&apiToken, "api-token", "",
+		fmt.Sprintf("require this bearer token on /v1 routes, overriding %s", config.EnvAPIToken))
 	return cmd
 }
 
